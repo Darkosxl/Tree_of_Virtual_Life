@@ -16,10 +16,20 @@ export class UINode {
 
     // REAL Pixi display object:
     this.container = makeThemedNode(x, y, 48, statusToTheme[status]);
-    
+
     // Defensive check in constructor
-    if (!this.container || typeof this.container.updateLocalTransform !== "function") {
-      console.error("makeThemedNode returned invalid object:", this.container, "for status:", status, "theme:", statusToTheme[status]);
+    if (
+      !this.container ||
+      typeof this.container.updateLocalTransform !== "function"
+    ) {
+      console.error(
+        "makeThemedNode returned invalid object:",
+        this.container,
+        "for status:",
+        status,
+        "theme:",
+        statusToTheme[status],
+      );
       throw new Error("makeThemedNode did not return a valid DisplayObject");
     }
   }

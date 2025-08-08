@@ -9,7 +9,7 @@ export enum NodeStatus {
 }
 
 export const statusToTheme = {
-  [NodeStatus.Locked]:  deepTeal,     // from themedNodes.ts
+  [NodeStatus.Locked]: deepTeal, // from themedNodes.ts
   [NodeStatus.Available]: brightAqua,
   [NodeStatus.Learned]: burntOrange,
 };
