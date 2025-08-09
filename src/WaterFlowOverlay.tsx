@@ -5,21 +5,22 @@ import type { Application, Container } from "pixi.js";
 type Pt = { x: number; y: number };
 
 type FlowOptions = {
-  color?: number;           // body color (gold by default)
-  edgeColor?: number;       // pale rim tint
-  opacity?: number;         // overall alpha
-  radiusPx?: number;        // line thickness
-  bend?: number;            // curve bend (px downward)
-  speed?: number;           // (kept for API) currents speed (unused in PoE mode)
-  streakDensity?: number;   // (kept for API) currents density (unused)
-  nodeRadiusPx?: number;    // visual node radius
-  endUnderlapPx?: number;   // extend under node ring to avoid a seam
-  taperPx?: number;         // fade near the ends
-  glowScale?: number;       // soft halo scale
+  color?: number; // body color (gold by default)
+  edgeColor?: number; // pale rim tint
+  opacity?: number; // overall alpha
+  radiusPx?: number; // line thickness
+  bend?: number; // curve bend (px downward)
+  speed?: number; // (kept for API) currents speed (unused in PoE mode)
+  streakDensity?: number; // (kept for API) currents density (unused)
+  nodeRadiusPx?: number; // visual node radius
+  endUnderlapPx?: number; // extend under node ring to avoid a seam
+  taperPx?: number; // fade near the ends
+  glowScale?: number; // soft halo scale
 };
 
 type Flow = {
-  from: Pt; to: Pt;
+  from: Pt;
+  to: Pt;
   opts: Required<FlowOptions>;
   core: THREE.Mesh;
   glow: THREE.Mesh;
@@ -85,12 +86,19 @@ export class WaterFlowOverlay {
       (THREE as any).SRGBColorSpace ?? (THREE as any).sRGBEncoding;
 
     this.renderer.setClearColor(0x000000, 0);
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, this.dprCap));
+    this.renderer.setPixelRatio(
+      Math.min(window.devicePixelRatio || 1, this.dprCap),
+    );
     this.renderer.setSize(window.innerWidth, window.innerHeight, false);
 
     this.scene = new THREE.Scene();
     this.camera = new THREE.OrthographicCamera(
-      0, window.innerWidth, 0, window.innerHeight, -100, 100
+      0,
+      window.innerWidth,
+      0,
+      window.innerHeight,
+      -100,
+      100,
     );
     this.camera.top = 0;
     this.camera.bottom = window.innerHeight;
@@ -112,17 +120,17 @@ export class WaterFlowOverlay {
   link(x1: number, y1: number, x2: number, y2: number, o?: FlowOptions) {
     // PoE-ish defaults (thin gold, subtle halo, whisper pulse)
     const opts: Required<FlowOptions> = {
-      color:         o?.color         ?? 0xFFD46A,  // warm gold
-      edgeColor:     o?.edgeColor     ?? 0xFFF0BF,  // pale rim
-      opacity:       o?.opacity       ?? 1.0,
-      radiusPx:      o?.radiusPx      ?? 3.5,
-      bend:          o?.bend          ?? 110,
-      speed:         o?.speed         ?? 0.0,       // currents off (kept for API)
-      streakDensity: o?.streakDensity ?? 0.0,       // currents off (kept for API)
-      nodeRadiusPx:  o?.nodeRadiusPx  ?? 26,
+      color: o?.color ?? 0xffd46a, // warm gold
+      edgeColor: o?.edgeColor ?? 0xfff0bf, // pale rim
+      opacity: o?.opacity ?? 1.0,
+      radiusPx: o?.radiusPx ?? 3.5,
+      bend: o?.bend ?? 110,
+      speed: o?.speed ?? 0.0, // currents off (kept for API)
+      streakDensity: o?.streakDensity ?? 0.0, // currents off (kept for API)
+      nodeRadiusPx: o?.nodeRadiusPx ?? 26,
       endUnderlapPx: o?.endUnderlapPx ?? 3,
-      taperPx:       o?.taperPx       ?? 18,
-      glowScale:     o?.glowScale     ?? 1.18,
+      taperPx: o?.taperPx ?? 18,
+      glowScale: o?.glowScale ?? 1.18,
     };
 
     const A = this.designToScreen(x1, y1);
@@ -130,7 +138,7 @@ export class WaterFlowOverlay {
     const B = this.shortenUnderNode(
       new THREE.Vector2(A.x, A.y),
       new THREE.Vector2(Bfull.x, Bfull.y),
-      opts.nodeRadiusPx + opts.endUnderlapPx
+      opts.nodeRadiusPx + opts.endUnderlapPx,
     );
 
     // Curve geometry
@@ -139,22 +147,30 @@ export class WaterFlowOverlay {
     const segs = 128;
     for (let i = 0; i <= segs; i++) {
       const t = i / segs;
-      const x = (1 - t) * (1 - t) * A.x + 2 * (1 - t) * t * ctrl.x + t * t * B.x;
-      const y = (1 - t) * (1 - t) * A.y + 2 * (1 - t) * t * ctrl.y + t * t * B.y;
+      const x =
+        (1 - t) * (1 - t) * A.x + 2 * (1 - t) * t * ctrl.x + t * t * B.x;
+      const y =
+        (1 - t) * (1 - t) * A.y + 2 * (1 - t) * t * ctrl.y + t * t * B.y;
       pts.push(new THREE.Vector3(x, y, 0));
     }
     const curve = new THREE.CatmullRomCurve3(pts);
-    const tube = new THREE.TubeGeometry(curve, Math.max(64, segs * 2), opts.radiusPx, 20, false);
+    const tube = new THREE.TubeGeometry(
+      curve,
+      Math.max(64, segs * 2),
+      opts.radiusPx,
+      20,
+      false,
+    );
 
     // Shared uniforms (pulse only; no streaks)
     const uniforms = {
-      uTime:          { value: 0 },
-      uBase:          { value: new THREE.Color(opts.color) },
-      uEdge:          { value: new THREE.Color(opts.edgeColor) },
-      uOpacity:       { value: opts.opacity },
-      uSpeed:         { value: opts.speed },
+      uTime: { value: 0 },
+      uBase: { value: new THREE.Color(opts.color) },
+      uEdge: { value: new THREE.Color(opts.edgeColor) },
+      uOpacity: { value: opts.opacity },
+      uSpeed: { value: opts.speed },
       uStreakDensity: { value: opts.streakDensity },
-      uTaper:         { value: opts.taperPx },
+      uTaper: { value: opts.taperPx },
     };
 
     // Core wire — opaque-ish look (Normal blending), tapered ends
@@ -171,9 +187,16 @@ export class WaterFlowOverlay {
 
     // Very subtle halo
     const glowGeom = tube.clone();
-    (glowGeom as THREE.BufferGeometry).scale(opts.glowScale, opts.glowScale, opts.glowScale);
+    (glowGeom as THREE.BufferGeometry).scale(
+      opts.glowScale,
+      opts.glowScale,
+      opts.glowScale,
+    );
     const glowMat = new THREE.ShaderMaterial({
-      uniforms: { ...uniforms, uOpacity: { value: Math.min(opts.opacity * 0.35, 0.35) } },
+      uniforms: {
+        ...uniforms,
+        uOpacity: { value: Math.min(opts.opacity * 0.35, 0.35) },
+      },
       vertexShader: CORE_VS,
       fragmentShader: GLOW_FS_POE,
       transparent: true,
@@ -184,14 +207,23 @@ export class WaterFlowOverlay {
     glow.frustumCulled = false;
 
     this.scene.add(glow, core);
-    this.flows.push({ from: { x: x1, y: y1 }, to: { x: x2, y: y2 }, opts, core, glow, uniforms });
+    this.flows.push({
+      from: { x: x1, y: y1 },
+      to: { x: x2, y: y2 },
+      opts,
+      core,
+      glow,
+      uniforms,
+    });
   }
 
   clear() {
     for (const f of this.flows) {
       this.scene.remove(f.core, f.glow);
-      (f.core.material as any).dispose?.(); (f.core.geometry as any).dispose?.();
-      (f.glow.material as any).dispose?.(); (f.glow.geometry as any).dispose?.();
+      (f.core.material as any).dispose?.();
+      (f.core.geometry as any).dispose?.();
+      (f.glow.material as any).dispose?.();
+      (f.glow.geometry as any).dispose?.();
     }
     this.flows = [];
   }
@@ -226,10 +258,15 @@ export class WaterFlowOverlay {
   }
 
   private onResize = () => {
-    const w = window.innerWidth, h = window.innerHeight;
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, this.dprCap));
+    const w = window.innerWidth,
+      h = window.innerHeight;
+    this.renderer.setPixelRatio(
+      Math.min(window.devicePixelRatio || 1, this.dprCap),
+    );
     this.renderer.setSize(w, h, false);
-    this.camera.right = w; this.camera.bottom = h; this.camera.updateProjectionMatrix();
+    this.camera.right = w;
+    this.camera.bottom = h;
+    this.camera.updateProjectionMatrix();
 
     // rebuild geometries to respect new scaling/position
     const keep = [...this.flows];
@@ -240,7 +277,7 @@ export class WaterFlowOverlay {
 
 /* ======================= SHADERS ======================= */
 
-const CORE_VS = /* glsl */`
+const CORE_VS = /* glsl */ `
   varying vec2 vUv;
   void main() {
     vUv = uv;
@@ -249,7 +286,7 @@ const CORE_VS = /* glsl */`
 `;
 
 // PoE-style beveled gold wire with subtle breathing pulse; tapered ends
-const CORE_FS_POE = /* glsl */`
+const CORE_FS_POE = /* glsl */ `
   precision highp float;
   varying vec2 vUv;
   uniform vec3  uBase;        // gold base
@@ -288,7 +325,7 @@ const CORE_FS_POE = /* glsl */`
   }
 `;
 
-const GLOW_FS_POE = /* glsl */`
+const GLOW_FS_POE = /* glsl */ `
   precision highp float;
   varying vec2 vUv;
   uniform vec3  uBase;
