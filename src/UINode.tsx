@@ -4,108 +4,62 @@ import {
   Assets,
   Container,
   Graphics,
-  NineSliceSprite,
   Text,
   Texture,
   Sprite,
 } from "pixi.js";
-import "pixi.js/sprite-nine-slice";
 import { makeThemedNode } from "./node_drawer";
 import { NodeStatus, statusToTheme } from "./nodeTypes";
 
 /* ───────────────────────── Types & constants ───────────────────────── */
-
 type Objective = { id: string; text: string; done: boolean };
 
-const NODE_STORE_PREFIX = "tol.node.v1.";
-const NODE_LIST_KEY = "tol_nodes_v1"; // from main.tsx store
 
-// Frame & icons
-const PANEL_FRAME_URL = "/assets/ui/quest_frame.png";
+const NODE_STORE_PREFIX = "tol.node.v1.";
+const NODE_LIST_KEY = "tol_nodes_v1";
+
 const LEVEL_ICON_BASE = "/assets/ui/level_"; // + 1..5 + "_icon.png"
 
-// Source PNG is 1024×1024; these are PRESERVED edge thicknesses (not coordinates).
-const SLICE_LEFT = 72;
-const SLICE_TOP = 118;
-const SLICE_RIGHT = 77;   // 1024 - 947
-const SLICE_BOTTOM = 126; // 1024 - 898
-
-// Smaller, “cut middle more” layout
-const MIN_WIDTH = 220;
-const MAX_WIDTH = 320;
-const MIN_HEIGHT = 120;
-
-// Safe insets so content never touches ornaments
-const SAFE_LEFT   = SLICE_LEFT + 12;
-const SAFE_RIGHT  = SLICE_RIGHT + 12;
-const SAFE_TOP    = SLICE_TOP + 14;
-const SAFE_BOTTOM = SLICE_BOTTOM + 40; // leaves room for the OK button
+const PAD = 8;
+const RADIUS = 6;
+const LIST_WIDTH = 280;
 
 const LINE_STYLE = {
   fill: 0xf1f1f1,
   fontFamily: "Tahoma, Segoe UI, Noto Sans, system-ui, sans-serif",
   fontSize: 13,
   wordWrap: true,
-  wordWrapWidth: 260,
+  breakWords: true,
+  wordWrapWidth: LIST_WIDTH,
   lineHeight: 18,
-  align: "center" as const, // center each wrapped paragraph
+  align: "left" as const,
 };
 
-const LINE_STYLE_DONE = {
-  ...LINE_STYLE,
-  fill: 0x7cff7c,
-  dropShadow: true,
-  dropShadowColor: 0x000000,
-  dropShadowDistance: 1,
-  dropShadowAlpha: 0.6,
-  dropShadowBlur: 0,
-};
+const log = (...a: any[]) =>
+  console.log(`[UINode ${new Date().toLocaleTimeString()}]`, ...a);
 
 /* ───────────────────── helpers ───────────────────── */
-
 function defaultNodeId(x: number, y: number) {
   return `N_${Math.round(x)}_${Math.round(y)}`;
 }
 
-let _frameTex: Texture | null = null;
-async function getFrameTexture(): Promise<Texture> {
-  if (_frameTex) return _frameTex;
-  _frameTex = await Assets.load(PANEL_FRAME_URL);
-  return _frameTex!;
-}
-
-// cache for level icons
 let _levelIconTex: Texture[] | null = null;
 async function getLevelIconTextures(): Promise<Texture[]> {
   if (_levelIconTex) return _levelIconTex;
-  const paths = [1, 2, 3, 4, 5].map(i => `${LEVEL_ICON_BASE}${i}_icon.png`);
-  const tex = await Promise.all(paths.map(p => Assets.load(p)));
+  const paths = [1, 2, 3, 4, 5].map((i) => `${LEVEL_ICON_BASE}${i}_icon.png`);
+  const tex = await Promise.all(paths.map((p) => Assets.load(p)));
   _levelIconTex = tex;
   return _levelIconTex!;
 }
 
-// small OK button
-function makeOkButtonTexture(app: Application): Texture {
-  const g = new Graphics();
-  const w = 62, h = 22;
-  g.rect(0, 0, w, h).fill({ color: 0xffffff, alpha: 0.12 });
-  g.rect(0, 0, w, h).stroke({ color: 0xffffff, width: 1, alpha: 0.35 });
-  return app.renderer.generateTexture(g, { scaleMode: "linear" });
-}
-
-// difficulty buckets (you asked for: 1–6, 7–14, 15–21, 21–28, 28–33).
-// To avoid overlap we place 28 in the top tier:
-// 1–6, 7–14, 15–21, 22–27, 28–33.
 function difficultyToLevel(d: number): number {
   const v = Math.max(0, Math.min(33, Math.round(d)));
   if (v <= 6) return 1;
   if (v <= 14) return 2;
   if (v <= 21) return 3;
   if (v <= 27) return 4;
-  return 5; // 28–33
+  return 5;
 }
-
-// color helpers (same gradient as before, looks good on your palette)
 function lerp(a: number, b: number, t: number) { return a + (b - a) * t; }
 function lerpColor(c1: number, c2: number, t: number) {
   const r1 = (c1 >> 16) & 255, g1 = (c1 >> 8) & 255, b1 = c1 & 255;
@@ -115,6 +69,7 @@ function lerpColor(c1: number, c2: number, t: number) {
   const b = Math.round(lerp(b1, b2, t));
   return (r << 16) | (g << 8) | b;
 }
+
 function difficultyColor(d: number): number {
   const stops = [
     { x: 0,  c: 0xEDEDED },
@@ -132,188 +87,182 @@ function difficultyColor(d: number): number {
   return lerpColor(a.c, b.c, t);
 }
 
-/* ───────────────────── Panel (NineSlice) ───────────────────── */
+/* ───────────────────── header builder ───────────────────── */
+async function buildHeaderRow(
+  title: string,
+  difficulty: number,
+  opts?: { align?: "left" | "center"; iconPx?: number },
+): Promise<Container> {
+  const level = difficultyToLevel(difficulty);
+  const color = difficultyColor(difficulty);
+  const icons = await getLevelIconTextures();
 
-class NodePanel extends Container {
-  private app: Application;
-  private frame: NineSliceSprite;
-  private list: Container;
-  private okPatch: NineSliceSprite;
-  private okText: Text;
-  private maskG: Graphics;
+  const titleText = new Text({
+    text: `${title || "Untitled"}  •  `,
+    style: { fill: 0xffffff, fontFamily: "Tahoma, Segoe UI, Noto Sans, system-ui, sans-serif", fontSize: 12 },
+  });
+  const diffNumber = new Text({
+    text: `${difficulty}`,
+    style: { fill: color, fontFamily: "Tahoma, Segoe UI, Noto Sans, system-ui, sans-serif", fontSize: 12, fontWeight: "700" },
+  });
+  const of33 = new Text({
+    text: "/33  ",
+    style: { fill: color, fontFamily: "Tahoma, Segoe UI, Noto Sans, system-ui, sans-serif", fontSize: 12, fontWeight: "700" },
+  });
 
+  const icon = new Sprite(icons[Math.max(0, Math.min(4, level - 1))]);
+  const iconH = Math.max(12, opts?.iconPx ?? 14);
+  const s = iconH / icon.height;
+  icon.scale.set(s);
+  icon.position.set(0, -1);
+
+  const row = new Container();
+  row.addChild(titleText);
+  diffNumber.position.set(titleText.width, 0); row.addChild(diffNumber);
+  of33.position.set(titleText.width + diffNumber.width, 0); row.addChild(of33);
+  icon.position.set(titleText.width + diffNumber.width + of33.width + 4, -1); row.addChild(icon);
+
+  (row as any)._align = opts?.align ?? "left";
+  return row;
+}
+
+class BubblePanel extends Container {
+  private bg = new Graphics();
+  private header = new Container();
+  private list = new Container();
+  private okPatch = new Graphics();
+  private okText = new Text({
+    text: "OK",
+    style: { fill: 0xffffff, fontFamily: "Tahoma, Segoe UI, Noto Sans, system-ui, sans-serif", fontSize: 12, fontWeight: "600" },
+  });
+
+  private title: string;
   private objectives: Objective[];
   private onToggle: (id: string) => void;
   private onClose: () => void;
+  private difficulty: number;
+  private fixedInnerW?: number;
 
   constructor(args: {
-    app: Application;
-    frameTexture: Texture;
+    title: string;
+    difficulty: number;
     objectives: Objective[];
     onToggle: (id: string) => void;
     onClose: () => void;
-    targetWidth?: number;
   }) {
     super();
-    this.app = args.app;
+    this.title = args.title;
     this.objectives = args.objectives;
     this.onToggle = args.onToggle;
     this.onClose = args.onClose;
+    this.difficulty = args.difficulty;
 
     this.sortableChildren = true;
-    (this as any).eventMode = "static"; // eat clicks behind panel
+    (this as any).eventMode = "static";
 
-    // Frame (small; middle is “cut”, corners preserved)
-    this.frame = new NineSliceSprite({
-      texture: args.frameTexture,
-      leftWidth: SLICE_LEFT,
-      topHeight: SLICE_TOP,
-      rightWidth: SLICE_RIGHT,
-      bottomHeight: SLICE_BOTTOM,
-      width: Math.max(MIN_WIDTH, Math.min(args.targetWidth ?? 240, MAX_WIDTH)),
-      height: MIN_HEIGHT,
-    });
-    this.addChild(this.frame);
-
-    // Objectives container
-    this.list = new Container();
-    this.addChild(this.list);
-
-    // OK button (smaller)
-    const okTex = makeOkButtonTexture(this.app);
-    this.okPatch = new NineSliceSprite({
-      texture: okTex,
-      leftWidth: 6, topHeight: 6, rightWidth: 6, bottomHeight: 6,
-      width: 62, height: 22,
-    });
+    this.addChild(this.bg, this.header, this.list, this.okPatch, this.okText);
     (this.okPatch as any).eventMode = "static";
     (this.okPatch as any).cursor = "pointer";
     (this.okPatch as any).on?.("pointertap", () => this.onClose());
-    this.addChild(this.okPatch);
+    (this.okText as any).eventMode = "static";
+    (this.okText as any).cursor = "pointer";
+    (this.okText as any).on?.("pointertap", () => this.onClose());
 
-    this.okText = new Text({
-      text: "OK",
-      style: {
-        fill: 0xffffff,
-        fontFamily: "Tahoma, Segoe UI, Noto Sans, system-ui, sans-serif",
-        fontSize: 12,
-        fontWeight: "600",
-      },
-    });
-    this.addChild(this.okText);
-
-    // Mask for wipe
-    this.maskG = new Graphics();
-    this.addChild(this.maskG);
-    this.mask = this.maskG;
-
-    this.relayout();
+    void this.build();
+  }
+  
+  private makeCheckbox(done: boolean) {
+    const g = new Graphics();
+    g.roundRect(0, 0, 14, 14, 3)
+      .fill({ color: done ? 0x2ad06f : 0x000000, alpha: done ? 0.9 : 0.4 })
+      .stroke({ color: 0xffffff, width: 1, alpha: 0.35 });
+    if (done) {
+      g.moveTo(3, 7).lineTo(6, 10).lineTo(11, 4).stroke({ color: 0x0a0, width: 2, alpha: 0.9 });
+      g.moveTo(3, 7).lineTo(6, 10).lineTo(11, 4).stroke({ color: 0xffffff, width: 1, alpha: 0.9 });
+    }
+    (g as any).eventMode = "static";
+    (g as any).cursor = "pointer";
+    return g;
   }
 
-  /** Lay everything out; objectives centered in the safe area. */
-  relayout() {
+  private async build() {
+    this.header.removeChildren();
+    const headerRow = await buildHeaderRow(this.title, this.difficulty, { align: "center", iconPx: 20 });
+    this.header.addChild(headerRow);
+
     this.list.removeChildren();
+    let y = headerRow.height + 10;
+    let maxRow = LIST_WIDTH;
 
-    const safeW = Math.max(MIN_WIDTH, Math.min(this.frame.width, MAX_WIDTH)) - (SAFE_LEFT + SAFE_RIGHT);
-    const safeH = Math.max(MIN_HEIGHT, this.frame.height) - (SAFE_TOP + SAFE_BOTTOM);
-
-    // First measure rows to compute total height
-    const rows: Text[] = [];
-    let total = 0;
     for (const obj of this.objectives) {
-      const t = new Text({
-        text: obj.text,
-        style: { ...(obj.done ? LINE_STYLE_DONE : LINE_STYLE), wordWrapWidth: safeW, align: "center" },
-      });
-      rows.push(t);
-      total += t.height + 4;
-    }
-    if (rows.length) total -= 4; // no gap after last
-
-    // Start y so that the whole block is centered within safe content area
-    let y = SAFE_TOP + Math.max(0, Math.round((safeH - total) / 2));
-
-    // Place rows centered horizontally
-    for (const t of rows) {
-      const x = SAFE_LEFT + Math.round((safeW - t.width) / 2);
-      t.position.set(x, y);
-      (t as any).eventMode = "static";
-      (t as any).cursor = "pointer";
-      const id = this.objectives[rows.indexOf(t)].id;
-      (t as any).on?.("pointertap", () => this.onToggle(id));
-      this.list.addChild(t);
-      y += t.height + 4;
+      const row = new Container();
+      const box = this.makeCheckbox(obj.done);
+      row.addChild(box);
+      const t = new Text({ text: obj.text, style: LINE_STYLE });
+      t.position.set(18, -2);
+      row.addChild(t);
+      (box as any).on?.("pointertap", () => this.onToggle(obj.id));
+      row.position.set(PAD, PAD + y);
+      this.list.addChild(row);
+      y += Math.max(16, t.height) + 6;
+      maxRow = Math.max(maxRow, 18 + t.width);
     }
 
-    // Compute desired panel size (keep it tight)
-    const okH = this.okPatch.height;
-    const desiredW = Math.max(MIN_WIDTH, Math.min(safeW + SAFE_LEFT + SAFE_RIGHT, MAX_WIDTH));
-    const desiredH = Math.max(MIN_HEIGHT, SAFE_TOP + Math.max(total, 40) + SAFE_BOTTOM);
+    const measuredInnerW = Math.max(headerRow.width, Math.max(LIST_WIDTH, maxRow));
+    if (this.fixedInnerW == null) this.fixedInnerW = measuredInnerW;
 
-    this.frame.width = desiredW;
-    this.frame.height = desiredH;
+    const contentW = this.fixedInnerW;
+    const contentH = Math.max(headerRow.height, 14) + 10 + y;
+    const totalW = contentW + PAD * 2;
+    const totalH = contentH + PAD * 2 + 30;
 
-    // OK bottom-center inside the safe box
-    this.okPatch.position.set(
-      Math.round((this.frame.width - this.okPatch.width) / 2),
-      Math.round(this.frame.height - SAFE_BOTTOM - this.okPatch.height),
-    );
+    this.header.position.set(PAD + Math.round((contentW - headerRow.width) / 2), PAD);
+    this.bg
+      .clear()
+      .roundRect(0, 0, totalW, totalH, RADIUS)
+      .fill({ color: 0x000000, alpha: 0.72 })
+      .stroke({ color: 0xffffff, width: 1, alpha: 0.25 });
+
+    const bw = 62, bh = 22;
+    const bx = Math.round((totalW - bw) / 2);
+    const by = Math.round(totalH - PAD - bh);
+    this.okPatch
+      .clear()
+      .roundRect(bx, by, bw, bh, 6)
+      .fill({ color: 0xffffff, alpha: 0.12 })
+      .stroke({ color: 0xffffff, width: 1, alpha: 0.35 });
     this.okText.position.set(
-      Math.round(this.okPatch.x + (this.okPatch.width - this.okText.width) / 2),
-      Math.round(this.okPatch.y + (this.okPatch.height - this.okText.height) / 2 + 0.5),
+      Math.round(bx + (bw - this.okText.width) / 2),
+      Math.round(by + (bh - this.okText.height) / 2 + 0.5),
     );
-
-    // Reset mask rectangle (0 height at bottom)
-    this.maskG.clear().rect(0, this.frame.height, this.frame.width, 0).fill(0xffffff);
   }
-
+  public dispose() {
+    // remove tooltip & panel if they exist
+    this.closePanel();
+    if (this.tooltip && this.uiLayer) {
+      this.uiLayer.removeChild(this.tooltip);
+      this.tooltip.destroy();
+      this.tooltip = undefined;
+    }
+  }
   public setObjectives(objs: Objective[]) {
     this.objectives = objs;
-    this.relayout();
-  }
-
-  /** bottom→top wipe; clean mask at the end */
-  public async playOpenAnim(): Promise<void> {
-    return new Promise((resolve) => {
-      const start = performance.now();
-      const dur = 200;
-      const H = this.frame.height;
-      this.alpha = 0.92;
-      this.scale.set(0.985);
-
-      const tick = (t: number) => {
-        const k = Math.min(1, (t - start) / dur);
-        const e = 1 - Math.pow(1 - k, 3);
-        const shown = H * e;
-        this.maskG.clear().rect(0, H - shown, this.frame.width, shown).fill(0xffffff);
-        this.alpha = 0.92 + 0.08 * e;
-        const s = 0.985 + 0.015 * e; this.scale.set(s);
-
-        if (k < 1) requestAnimationFrame(tick);
-        else {
-          this.mask = null;
-          this.removeChild(this.maskG);
-          this.maskG.destroy();
-          resolve();
-        }
-      };
-      requestAnimationFrame(tick);
-    });
+    void this.build();
   }
 }
 
-/* ───────────────────────── Drag key handling ───────────────────────── */
-
+/* ───────── Keys for drag (E) only ───────── */
 let DRAG_KEY_DOWN = false;
 window.addEventListener("keydown", (e) => {
-  if (e.key.toLowerCase() === "e") DRAG_KEY_DOWN = true;
+  const k = e.key.toLowerCase();
+  if (k === "e") { DRAG_KEY_DOWN = true; log("keydown E (drag)"); }
 });
 window.addEventListener("keyup", (e) => {
-  if (e.key.toLowerCase() === "e") DRAG_KEY_DOWN = false;
+  const k = e.key.toLowerCase();
+  if (k === "e") { DRAG_KEY_DOWN = false; log("keyup E"); }
 });
 
 /* ───────────────────────── UINode ───────────────────────── */
-
 export class UINode {
   readonly id: string;
   x: number;
@@ -328,22 +277,22 @@ export class UINode {
   private title = "";
   private difficulty = 0;
 
-  // external refs
   private app?: Application;
   private tree?: Container;
   private uiLayer?: Container;
 
-  private panel?: NodePanel;
-
-  // connector (no pulse; grows once)
-  private connector?: Graphics;
-
-  // hover tooltip
+  private panel?: BubblePanel;
   private tooltip?: Container;
 
-  // drag state
   private dragging = false;
   private dragOffset = { dx: 0, dy: 0 };
+  private dragStart = { x: 0, y: 0 };
+  private didDrag = false;
+  private suppressTapUntil = 0;
+
+  private onMoveCb?: (id: string, x: number, y: number) => void;
+  private onDropCb?: (id: string, x: number, y: number) => void;
+  private onClickCb?: (id: string) => boolean | void; // NEW: allow main to consume taps
 
   constructor(x: number, y: number, status: NodeStatus, id?: string) {
     this.id = id ?? defaultNodeId(x, y);
@@ -359,26 +308,44 @@ export class UINode {
 
     (this.container as any).eventMode = "static";
     (this.container as any).cursor = "pointer";
-    // open panel on tap/click when NOT dragging
+
     (this.container as any).on?.("pointertap", () => {
-      if (!this.dragging) this.openPanel();
+      if (this.dragging) return;
+      if (performance.now() < this.suppressTapUntil) return;
+
+      // If main consumes the click (edge mode), don't open the panel.
+      const consumed = this.onClickCb?.(this.id);
+      if (consumed) return;
+
+      this.openPanel();
     });
 
-    // pointer for drag
-    (this.container as any).on?.("pointerdown", (ev: any) => this.onPointerDown(ev));
+    (this.container as any).on?.("pointerdown", (ev: any) =>
+      this.onPointerDown(ev),
+    );
   }
 
-  enableObjectivesUI(app: Application, treeContainer: Container, uiLayer: Container) {
+  enableObjectivesUI(
+    app: Application,
+    treeContainer: Container,
+    uiLayer: Container,
+    opts?: {
+      onMove?: (id: string, x: number, y: number) => void;
+      onDrop?: (id: string, x: number, y: number) => void;
+      onClick?: (id: string) => boolean | void; // NEW
+    },
+  ) {
     this.app = app;
     this.tree = treeContainer;
     this.uiLayer = uiLayer;
+    this.onMoveCb = opts?.onMove;
+    this.onDropCb = opts?.onDrop;
+    this.onClickCb = opts?.onClick;
 
-    // hover tooltip
     (this.container as any).on?.("pointerover", () => this.showTooltip());
     (this.container as any).on?.("pointerout", () => this.hideTooltip());
   }
 
-  /* ───────── persistence ───────── */
   private key() { return `${NODE_STORE_PREFIX}${this.id}`; }
 
   private loadState() {
@@ -408,7 +375,6 @@ export class UINode {
     }));
   }
 
-  // also persist x/y into tol_nodes_v1 (so reload keeps the new position)
   private persistXY() {
     try {
       const raw = localStorage.getItem(NODE_LIST_KEY);
@@ -416,8 +382,7 @@ export class UINode {
       const list = JSON.parse(raw) as Array<{ id: string; x: number; y: number; status: number }>;
       const row = list.find(r => r.id === this.id);
       if (row) {
-        row.x = this.x;
-        row.y = this.y;
+        row.x = this.x; row.y = this.y;
         localStorage.setItem(NODE_LIST_KEY, JSON.stringify(list));
       }
     } catch {}
@@ -439,6 +404,7 @@ export class UINode {
   private refreshVisual() {
     try {
       this.container.removeChild(this._visual);
+      // @ts-ignore
       (this._visual as any).destroy?.({ children: true });
     } catch {}
     this._visual = makeThemedNode(this.x, this.y, 48, statusToTheme[this.status]);
@@ -458,60 +424,30 @@ export class UINode {
     this.saveState();
   }
 
-  /* ───────── Tooltip (title + difficulty) ───────── */
   private async showTooltip() {
     if (!this.app || !this.uiLayer || !this.tree) return;
     if (this.tooltip) return;
 
-    const level = difficultyToLevel(this.difficulty);
-    const color = difficultyColor(this.difficulty);
-    const icons = await getLevelIconTextures();
+    const headerRow = await buildHeaderRow(this.title, this.difficulty, { align: "left", iconPx: 14 });
 
-    const titleText = new Text({
-      text: `${this.title || "Untitled"}  •  `,
-      style: { fill: 0xffffff, fontFamily: "Tahoma, Segoe UI, Noto Sans, system-ui, sans-serif", fontSize: 12 },
-    });
-    const diffNumber = new Text({
-      text: `${this.difficulty}`,
-      style: { fill: color, fontFamily: "Tahoma, Segoe UI, Noto Sans, system-ui, sans-serif", fontSize: 12, fontWeight: "700" },
-    });
-    const of33 = new Text({
-      text: "/33  ",
-      style: { fill: color, fontFamily: "Tahoma, Segoe UI, Noto Sans, system-ui, sans-serif", fontSize: 12, fontWeight: "700" },
-    });
-
-    // Single level icon, ~20% bigger
-    const icon = new Sprite(icons[Math.max(0, Math.min(4, level - 1))]);
-    const iconH = 12 * 1.2;
-    const s = iconH / icon.height;
-    icon.scale.set(s);
-    icon.position.set(0, -1);
-
-    // Compose row
-    const pad = 8;
-    const row = new Container();
-    row.addChild(titleText);
-    diffNumber.position.set(titleText.width, 0); row.addChild(diffNumber);
-    of33.position.set(titleText.width + diffNumber.width, 0); row.addChild(of33);
-    icon.position.set(titleText.width + diffNumber.width + of33.width + 4, -1);
-    row.addChild(icon);
+    const w = headerRow.width + PAD * 2;
+    const h = Math.max(headerRow.height, 14) + PAD * 2;
 
     const bg = new Graphics();
-    bg.roundRect(0, 0, row.width + pad * 2, Math.max(row.height, iconH) + pad * 2, 6)
+    bg.roundRect(0, 0, w, h, RADIUS)
       .fill({ color: 0x000000, alpha: 0.72 })
       .stroke({ color: 0xffffff, width: 1, alpha: 0.25 });
 
     const c = new Container();
-    c.addChild(bg, row);
-    row.position.set(pad, pad);
+    c.addChild(bg, headerRow);
+    headerRow.position.set(PAD, PAD);
 
     this.tooltip = c;
     this.tooltip.zIndex = 10_001;
     this.uiLayer.addChild(this.tooltip);
 
     const { x: gx, y: gy } = this.tree.toGlobal({ x: this.x, y: this.y });
-    // centered above node
-    c.position.set(Math.round(gx - (c.width / 2)), Math.round(gy - c.height - 14));
+    c.position.set(Math.round(gx - w / 2), Math.round(gy - h - 14));
   }
 
   private hideTooltip() {
@@ -521,16 +457,13 @@ export class UINode {
     this.tooltip = undefined;
   }
 
-  /* ───────── open/close panel ───────── */
   public async openPanel() {
     if (!this.app || !this.tree || !this.uiLayer) return;
     this.closePanel();
 
-    const frameTexture = await getFrameTexture();
-
-    this.panel = new NodePanel({
-      app: this.app,
-      frameTexture,
+    const panel = new BubblePanel({
+      title: this.title,
+      difficulty: this.difficulty,
       objectives: this.objectives.slice(),
       onToggle: (objId) => {
         const o = this.objectives.find((x) => x.id === objId);
@@ -541,77 +474,39 @@ export class UINode {
         this.panel?.setObjectives(this.objectives.slice());
       },
       onClose: () => this.closePanel(),
-      targetWidth: 240, // small frame
     });
 
     const { x: gx, y: gy } = this.tree.toGlobal({ x: this.x, y: this.y });
+    const px = Math.round(gx - panel.width / 2);
+    const py = Math.round(gy + 20);
 
-    // Place panel 20px BELOW the node, horizontally centered
-    const panelW = this.panel.width, panelH = this.panel.height, m = 8;
-    let px = Math.round(gx - panelW / 2);
-    let py = Math.round(gy + 20);
-    const { width: W, height: H } = this.app.screen;
-    px = Math.max(m, Math.min(px, W - panelW - m));
-    py = Math.max(m, Math.min(py, H - panelH - m));
-    this.panel.position.set(px, py);
-
+    this.panel = panel;
     this.panel.zIndex = 10_000;
     this.uiLayer.addChild(this.panel);
-    await this.panel.playOpenAnim();
-
-    // connector (node → panel top-center), no pulse
-    if (this.connector) { this.uiLayer.removeChild(this.connector); this.connector.destroy(); }
-    this.connector = new Graphics();
-    this.uiLayer.addChild(this.connector);
-
-    const start = { x: gx, y: gy + 6 };
-    const end = { x: px + panelW / 2, y: py };
-    const dx = end.x - start.x, dy = end.y - start.y;
-    const dist = Math.hypot(dx, dy);
-    const nx = dx / dist, ny = dy / dist;
-
-    const t0 = performance.now(), growDur = 200;
-
-    const drawBaseTo = (len: number) => {
-      const x2 = start.x + nx * len;
-      const y2 = start.y + ny * len;
-      this.connector!.clear();
-      // soft shadow + darker blonde core
-      this.connector!
-        .moveTo(start.x, start.y).lineTo(x2, y2)
-        .stroke({ color: 0x121007, width: 6, alpha: 0.18 });
-      this.connector!
-        .moveTo(start.x, start.y).lineTo(x2, y2)
-        .stroke({ color: 0xC6A24A, width: 2.6, alpha: 1.0 });
-    };
-
-    const growTick = (t: number) => {
-      const k = Math.min(1, (t - t0) / growDur);
-      const e = 1 - Math.pow(1 - k, 3);
-      drawBaseTo(dist * e);
-      if (k < 1) requestAnimationFrame(growTick);
-    };
-    requestAnimationFrame(growTick);
+    this.panel.position.set(px, py);
   }
 
   public closePanel() {
-    if (this.connector && this.uiLayer) {
-      this.uiLayer.removeChild(this.connector);
-      this.connector.destroy();
-      this.connector = undefined;
-    }
     if (this.panel && this.uiLayer) {
       this.uiLayer.removeChild(this.panel);
-      (this.panel as any).destroy?.({ children: true });
+      // @ts-ignore
+      this.panel.destroy?.({ children: true });
       this.panel = undefined;
     }
   }
 
-  /* ───────── Drag (hold 'e' to drag & drop) ───────── */
   private onPointerDown(ev: any) {
     if (!this.app || !this.tree) return;
-    if (!DRAG_KEY_DOWN) return; // only when holding 'e'
+
+    // ── Drag (E) ──────────────────────────────────────────────
+    if (!DRAG_KEY_DOWN) return;
+    log("pointerdown on node WITH E (drag start)", this.id);
+
+    this.closePanel();
+    this.hideTooltip();
+
     this.dragging = true;
+    this.didDrag = false;
     (this.container as any).cursor = "grabbing";
     ev.stopPropagation?.();
 
@@ -619,31 +514,53 @@ export class UINode {
     const s = this.tree.scale.x;
     const designX = (gp.x - this.tree.position.x) / s;
     const designY = (gp.y - this.tree.position.y) / s;
-
     this.dragOffset.dx = designX - this.x;
     this.dragOffset.dy = designY - this.y;
+    this.dragStart.x = this.x;
+    this.dragStart.y = this.y;
 
-    const onMove = (e: any) => {
+    const move = (e: PointerEvent) => {
       if (!this.dragging) return;
-      const g = e.global as { x: number; y: number };
-      const nx = (g.x - this.tree!.position.x) / s - this.dragOffset.dx;
-      const ny = (g.y - this.tree!.position.y) / s - this.dragOffset.dy;
+      const rect = this.app!.canvas.getBoundingClientRect();
+      const sx = e.clientX - rect.left;
+      const sy = e.clientY - rect.top;
+
+      const nx = (sx - this.tree!.position.x) / s - this.dragOffset.dx;
+      const ny = (sy - this.tree!.position.y) / s - this.dragOffset.dy;
+
+      if (Math.hypot(nx - this.dragStart.x, ny - this.dragStart.y) > 1.5) {
+        this.didDrag = true;
+      }
+
       this.x = nx;
       this.y = ny;
       this.refreshVisual();
+      this.onMoveCb?.(this.id, this.x, this.y);
     };
 
-    const onUp = () => {
+    const finishDrag = () => {
+      if (!this.dragging) return;
       this.dragging = false;
       (this.container as any).cursor = "pointer";
       this.persistXY();
-      this.app!.stage.off("pointermove", onMove);
-      this.app!.stage.off("pointerup", onUp);
-      this.app!.stage.off("pointerupoutside", onUp);
+      this.onDropCb?.(this.id, this.x, this.y);
+
+      this.suppressTapUntil = performance.now() + 150;
+      this.didDrag = false;
+
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("keyup", keyUp);
+      log("drag finished", this.id, { x: this.x, y: this.y });
     };
 
-    this.app.stage.on("pointermove", onMove);
-    this.app.stage.on("pointerup", onUp);
-    this.app.stage.on("pointerupoutside", onUp);
+    const up = () => finishDrag();
+    const keyUp = (e: KeyboardEvent) => {
+      if (e.key.toLowerCase() === "e") finishDrag();
+    };
+
+    window.addEventListener("pointermove", move, { passive: true });
+    window.addEventListener("pointerup", up, { passive: true });
+    window.addEventListener("keyup", keyUp, { passive: true });
   }
 }
